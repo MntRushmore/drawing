@@ -1,130 +1,297 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>HandPaint — Camera Drawing</title>
-<style>
-  body { margin: 0; background: #111; color: white; font-family: sans-serif; }
-  canvas { display: block; margin: 0 auto; background: #000; }
-  .controls { position: fixed; top: 10px; left: 10px; z-index: 10; }
-  button { margin-right: 5px; padding: 5px 10px; }
-</style>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HandPaint — draw with your hands</title>
+  <style>
+    :root{
+      --bg:#0f0f14; --muted:#1b1b24; --text:#f5f7ff; --accent:#a0e9ff; --accent2:#ffb3c1;
+      --panel:rgba(20,20,30,.6);
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;}
+    body{
+      margin:0; background: radial-gradient(1200px 800px at 15% 20%, #1b1b24 0%, #0f0f14 60%), url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2270%22 height=%2770%22><circle cx=%2235%22 cy=%2235%22 r=%221%22 fill=%22%232a2a39%22/></svg>');
+      color:var(--text); font: 16px/1.4 ui-rounded, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Apple Color Emoji', 'Segoe UI Emoji';
+      overflow:hidden;
+    }
+    #app{position:relative; width:100vw; height:100vh;}
+    canvas{position:absolute; inset:0; width:100%; height:100%;}
+    #overlay{pointer-events:none}
+    #ui{
+      position:fixed; left:1rem; top:1rem; right:1rem; display:flex; gap:.75rem; flex-wrap:wrap;
+      align-items:center; z-index:10; backdrop-filter: blur(8px); background:var(--panel);
+      border:1px solid #2c2c3a; padding:.6rem .8rem; border-radius:16px; box-shadow:0 10px 40px rgba(0,0,0,.3);
+    }
+    .btn, .seg input+label{
+      display:inline-flex; align-items:center; gap:.5rem; padding:.5rem .7rem; border-radius:12px;
+      border:1px solid #2a2a36; background:#16161f; color:var(--text); cursor:pointer; user-select:none;
+      transition: transform .1s ease, background .2s ease, border-color .2s ease, box-shadow .2s ease;
+    }
+    .btn:hover, .seg input+label:hover{transform:translateY(-1px);}
+    .btn:active{transform:translateY(1px)}
+    .seg{display:inline-flex; background:#12121a; padding:.25rem; border-radius:12px; border:1px solid #2a2a36;}
+    .seg input{display:none}
+    .seg input:checked+label{background:#1f1f2a; border-color:#3a3a55; box-shadow:0 0 0 2px rgba(160,233,255,.1) inset}
+    .swatch{width:22px; height:22px; border-radius:50%; border:1px solid #0006; box-shadow:inset 0 0 0 2px #0003}
+    #rightDock{
+      position:fixed; right:1rem; top:5.2rem; width:260px; display:flex; flex-direction:column; gap:.6rem; z-index:9;
+    }
+    .card{background:var(--panel); border:1px solid #2c2c3a; border-radius:16px; padding:.8rem; box-shadow:0 10px 40px rgba(0,0,0,.35)}
+    .row{display:flex; align-items:center; justify-content:space-between; gap:.75rem; margin:.35rem 0}
+    .row input[type=range]{width:130px}
+    .hint{opacity:.8; font-size:.9rem}
+    #status{position:fixed; left:1rem; bottom:1rem; background:var(--panel); border:1px solid #2c2c3a; border-radius:12px; padding:.5rem .7rem; box-shadow:0 10px 30px rgba(0,0,0,.3);}
+    #video{position:fixed; right:1rem; bottom:1rem; width:160px; height:120px; object-fit:cover; border-radius:12px; border:1px solid #2c2c3a; opacity:.35}
+    .badge{padding:.2rem .5rem; border-radius:999px; border:1px solid #3a3a55; background:#151522; font-size:.8rem; opacity:.9}
+    .kbd{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; background:#151522; padding:.1rem .35rem; border-radius:6px; border:1px solid #2a2a36}
+    .glow{filter: drop-shadow(0 0 6px rgba(160,233,255,.35)) drop-shadow(0 0 14px rgba(255,179,193,.22));}
+  </style>
 </head>
 <body>
-<div class="controls">
-  <button id="start">Start Camera</button>
-  <button id="clear">Clear</button>
-  <button id="save">Save</button>
-  <select id="brush">
-    <option value="neon">Neon</option>
-    <option value="ink">Ink</option>
-    <option value="watercolor">Watercolor</option>
-    <option value="particles">Particles</option>
-  </select>
-</div>
-<video id="video" style="display:none;" playsinline></video>
-<canvas id="output"></canvas>
-<script>
-const video = document.getElementById('video');
-const canvas = document.getElementById('output');
-const ctx = canvas.getContext('2d');
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+  <div id="app">
+    <canvas id="paint"></canvas>
+    <canvas id="overlay"></canvas>
+    <video id="video" playsinline muted></video>
+  </div>
 
-let drawing = false;
-let prevX = null, prevY = null;
-let brushType = 'neon';
+  <div id="ui">
+    <button id="startBtn" class="btn">🎥 Start Camera</button>
+    <div class="seg" id="modeSeg">
+      <input type="radio" id="mode-draw" name="mode" value="draw" checked>
+      <label class="btn" for="mode-draw">✍️ Draw</label>
+      <input type="radio" id="mode-erase" name="mode" value="erase">
+      <label class="btn" for="mode-erase">🧽 Erase</label>
+    </div>
+    <div class="seg" id="styleSeg">
+      <input type="radio" id="style-ink" name="style" value="ink" checked>
+      <label class="btn" for="style-ink">🖋️ Ink</label>
+      <input type="radio" id="style-neon" name="style" value="neon">
+      <label class="btn" for="style-neon">🌈 Neon</label>
+      <input type="radio" id="style-water" name="style" value="water">
+      <label class="btn" for="style-water">💧 Watercolor</label>
+      <input type="radio" id="style-spray" name="style" value="spray">
+      <label class="btn" for="style-spray">✨ Particles</label>
+    </div>
+    <div class="seg" id="mirrorSeg">
+      <input type="checkbox" id="mirrorX" checked>
+      <label class="btn" for="mirrorX">↔️ Mirror X</label>
+      <input type="checkbox" id="mirrorY">
+      <label class="btn" for="mirrorY">↕️ Mirror Y</label>
+      <input type="checkbox" id="symm">
+      <label class="btn" for="symm">❇️ Kaleido</label>
+    </div>
+    <button id="saveBtn" class="btn">💾 Save PNG</button>
+    <button id="clearBtn" class="btn">🧹 Clear</button>
+    <span class="badge">Pinch index+thumb to toggle draw</span>
+  </div>
 
-function distance(a, b) {
-  return Math.hypot(a.x - b.x, a.y - b.y);
-}
+  <div id="rightDock">
+    <div class="card">
+      <div class="row"><span>Brush size</span><input type="range" id="size" min="2" max="40" value="10"></div>
+      <div class="row"><span>Flow</span><input type="range" id="flow" min="0.1" max="1" step="0.1" value="0.8"></div>
+      <div class="row"><span>Color</span>
+        <div style="display:flex; gap:.35rem; align-items:center; flex-wrap:wrap">
+          <button class="swatch" data-c="#ffffff" style="background:#ffffff"></button>
+          <button class="swatch" data-c="#a0e9ff" style="background:#a0e9ff"></button>
+          <button class="swatch" data-c="#ffb3c1" style="background:#ffb3c1"></button>
+          <button class="swatch" data-c="#c1ffb3" style="background:#c1ffb3"></button>
+          <button class="swatch" data-c="#ffd29d" style="background:#ffd29d"></button>
+          <input type="color" id="picker" value="#a0e9ff" style="width:32px; height:22px; border:none; background:transparent;" />
+        </div>
+      </div>
+      <div class="row"><label><input type="checkbox" id="paper" checked> Paper texture</label><label><input type="checkbox" id="glow"> Glow</label></div>
+      <div class="hint">Gestures: <span class="kbd">pinch</span> = toggle draw • <span class="kbd">open palm</span> = stop</div>
+    </div>
+  </div>
 
-function drawLine(x1, y1, x2, y2) {
-  if (brushType === 'neon') {
-    ctx.strokeStyle = `hsl(${Math.random()*360},100%,50%)`;
-    ctx.shadowColor = ctx.strokeStyle;
-    ctx.shadowBlur = 20;
-    ctx.lineWidth = 5;
-  } else if (brushType === 'ink') {
-    ctx.strokeStyle = 'black';
-    ctx.shadowBlur = 0;
-    ctx.lineWidth = 3;
-  } else if (brushType === 'watercolor') {
-    ctx.strokeStyle = `rgba(0,0,255,${Math.random()*0.5})`;
-    ctx.lineWidth = 20;
-  } else if (brushType === 'particles') {
-    for (let i=0;i<5;i++) {
-      ctx.fillStyle = `hsl(${Math.random()*360},100%,50%)`;
-      ctx.beginPath();
-      ctx.arc(x2 + Math.random()*10-5, y2 + Math.random()*10-5, 3, 0, Math.PI*2);
-      ctx.fill();
-    }
-    return;
+  <div id="status">Ready</div>
+
+  <!-- Mediapipe Hands (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+  <script>
+  // ---- util helpers ----
+  const $ = sel => document.querySelector(sel);
+  const lerp = (a,b,t)=>a+(b-a)*t;
+  const dist = (a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
+
+  const video = $('#video');
+  const paint = $('#paint');
+  const overlay = $('#overlay');
+  const pctx = paint.getContext('2d');
+  const octx = overlay.getContext('2d');
+
+  let W=0,H=0; let drawing=false; let lastPt=null; let pinchActive=false; let color='#a0e9ff';
+  let brushSize=10; let flow=0.8; let mode='draw'; let style='ink';
+
+  function resize(){
+    W = paint.width = overlay.width = innerWidth * devicePixelRatio;
+    H = paint.height = overlay.height = innerHeight * devicePixelRatio;
+    paint.style.width = overlay.style.width = innerWidth+'px';
+    paint.style.height= overlay.style.height= innerHeight+'px';
+    pctx.lineCap='round'; pctx.lineJoin='round';
+    octx.setTransform(1,0,0,1,0,0);
   }
-  ctx.beginPath();
-  ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
-  ctx.stroke();
-}
+  addEventListener('resize', resize); resize();
 
-const hands = new Hands({locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-hands.setOptions({
-  maxNumHands: 1,
-  modelComplexity: 1,
-  minDetectionConfidence: 0.7,
-  minTrackingConfidence: 0.5
-});
+  function setStatus(t){ $('#status').textContent=t; }
 
-hands.onResults(results => {
-  ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
-  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-    const landmarks = results.multiHandLandmarks[0];
-    const indexTip = landmarks[8];
-    const thumbTip = landmarks[4];
-    const pinch = distance(indexTip, thumbTip) < 0.05;
-    const x = indexTip.x * canvas.width;
-    const y = indexTip.y * canvas.height;
-    if (pinch) {
-      if (!drawing) {
-        drawing = true;
-        prevX = x; prevY = y;
-      } else {
-        drawLine(prevX, prevY, x, y);
-        prevX = x; prevY = y;
+  // UI wiring
+  $('#startBtn').onclick = async ()=>{
+    try{
+      await startCamera(); setStatus('Camera started');
+      $('#startBtn').disabled = true; $('#startBtn').textContent='✅ Camera on';
+    }catch(e){ setStatus('Camera error: '+e.message); }
+  };
+  $('#saveBtn').onclick = ()=>{
+    const a=document.createElement('a'); a.download='handpaint-'+Date.now()+'.png'; a.href=paint.toDataURL('image/png'); a.click();
+  };
+  $('#clearBtn').onclick = ()=>{ pctx.clearRect(0,0,W,H); };
+  $('#size').oninput = e=> brushSize = +e.target.value;
+  $('#flow').oninput = e=> flow = +e.target.value;
+  $('#picker').oninput = e=> color = e.target.value;
+  document.querySelectorAll('.swatch').forEach(b=> b.onclick=()=>{ color=b.dataset.c; $('#picker').value=color; });
+  document.querySelectorAll('#modeSeg input').forEach(r=> r.onchange=()=> mode=r.value);
+  document.querySelectorAll('#styleSeg input').forEach(r=> r.onchange=()=> style=r.value);
+  $('#mirrorX').onchange = ()=>{}; $('#mirrorY').onchange = ()=>{}; $('#symm').onchange = ()=>{};
+  $('#paper').onchange = (e)=>{ document.body.style.background = e.target.checked ?
+    'radial-gradient(1200px 800px at 15% 20%, #1b1b24 0%, #0f0f14 60%), url(data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 width=%2270%22 height=%2770%22><circle cx=%2235%22 cy=%2235%22 r=%221%22 fill=%22%232a2a39%22/></svg>)'
+    : 'linear-gradient(120deg, #0f0f14, #1b1b24)'; };
+  $('#glow').onchange = (e)=>{ paint.classList.toggle('glow', e.target.checked); };
+
+  // ---- Mediapipe Hands setup ----
+  let hands, camera;
+
+  async function startCamera(){
+    hands = new Hands({locateFile: (file)=>`https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+    hands.setOptions({
+      maxNumHands: 1,
+      modelComplexity: 1,
+      minDetectionConfidence: 0.7,
+      minTrackingConfidence: 0.6
+    });
+    hands.onResults(onResults);
+
+    const stream = await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280}, height:{ideal:720}}, audio:false});
+    video.srcObject = stream; await video.play();
+
+    camera = new Camera(video, { onFrame: async()=>{ await hands.send({image: video}); }, width: 1280, height: 720 });
+    camera.start();
+  }
+
+  function mapPoint(pt){
+    // Mediapipe normalized coords -> canvas pixels (Y is normal)
+    return { x: pt.x * W, y: pt.y * H };
+  }
+
+  function drawBrush(from, to){
+    const mirrors = [];
+    const useX = $('#mirrorX').checked; const useY = $('#mirrorY').checked; const useK = $('#symm').checked;
+
+    function addMirrors(p){
+      const arr=[p];
+      if(useX) arr.push({x:W-p.x, y:p.y});
+      if(useY) arr.push({x:p.x, y:H-p.y});
+      if(useX && useY) arr.push({x:W-p.x, y:H-p.y});
+      if(useK){ // four-way kaleidoscope around center
+        const cx=W/2, cy=H/2; const dx=p.x-cx, dy=p.y-cy;
+        arr.push({x:cx+ dy, y:cy+ dx});
+        arr.push({x:cx- dy, y:cy- dx});
       }
-    } else {
-      drawing = false;
+      return arr;
+    }
+
+    const ps = addMirrors(from), qs = addMirrors(to);
+
+    for(let i=0;i<ps.length;i++){
+      const a=ps[i], b=qs[i];
+      if(style==='spray'){
+        const steps = Math.max(1, Math.floor(dist(a,b)/8));
+        for(let s=0;s<=steps;s++){
+          const t=s/steps; const x=lerp(a.x,b.x,t), y=lerp(a.y,b.y,t);
+          for(let k=0;k<6;k++){
+            const r = (Math.random()*brushSize);
+            const ang = Math.random()*Math.PI*2;
+            const px = x + Math.cos(ang)*r, py = y + Math.sin(ang)*r;
+            pctx.globalAlpha = 0.08*flow; pctx.fillStyle = color; pctx.beginPath(); pctx.arc(px,py, Math.max(1,brushSize*0.15*Math.random()), 0, Math.PI*2); pctx.fill();
+          }
+        }
+      } else {
+        pctx.save();
+        if(style==='neon'){
+          pctx.shadowColor = color; pctx.shadowBlur = brushSize*1.4;
+        } else if(style==='water'){
+          pctx.globalCompositeOperation = 'source-over';
+        }
+        pctx.globalAlpha = flow;
+        pctx.strokeStyle = color; pctx.lineWidth = brushSize;
+        pctx.beginPath(); pctx.moveTo(a.x, a.y); pctx.lineTo(b.x, b.y); pctx.stroke();
+        if(style==='water'){
+          // soft bleed
+          pctx.globalAlpha = 0.05; pctx.filter='blur(2px)';
+          pctx.beginPath(); pctx.moveTo(a.x, a.y); pctx.lineTo(b.x, b.y); pctx.stroke();
+          pctx.filter='none';
+        }
+        pctx.restore();
+      }
     }
   }
-});
 
-document.getElementById('start').onclick = async () => {
-  const camera = new Camera(video, {
-    onFrame: async () => { await hands.send({image: video}); },
-    width: 640,
-    height: 480
+  let wasPinching=false;
+  function onResults(res){
+    octx.clearRect(0,0,W,H);
+    if(!res.multiHandLandmarks || res.multiHandLandmarks.length===0){
+      setStatus('Show your hand'); lastPt=null; return;
+    }
+    const lm = res.multiHandLandmarks[0];
+    const tip = mapPoint(lm[8]); // index tip
+    const thumb = mapPoint(lm[4]);
+
+    // draw guide
+    octx.save();
+    octx.globalAlpha=0.7; octx.strokeStyle='#3a3a55'; octx.lineWidth=2; octx.beginPath(); octx.arc(tip.x, tip.y, 12, 0, Math.PI*2); octx.stroke();
+    octx.restore();
+
+    const pinch = Math.hypot(tip.x-thumb.x, tip.y-thumb.y) < Math.max(40, brushSize*3);
+
+    if(pinch && !wasPinching){ drawing = !drawing; setStatus(drawing? 'Drawing: ON' : 'Drawing: OFF'); }
+    wasPinching = pinch;
+
+    if(!drawing){ lastPt=null; return; }
+
+    const curr = tip;
+    if(!lastPt){ lastPt = curr; return; }
+
+    // Erase or draw
+    if(mode==='erase'){
+      pctx.save(); pctx.globalCompositeOperation='destination-out'; pctx.lineWidth=brushSize*1.6; pctx.lineCap='round'; pctx.beginPath(); pctx.moveTo(lastPt.x,lastPt.y); pctx.lineTo(curr.x,curr.y); pctx.stroke(); pctx.restore();
+    } else {
+      // Smoothly step to avoid gaps on fast motion
+      const steps = Math.max(1, Math.floor(dist(lastPt,curr)/ (brushSize*0.5)));
+      let prev = lastPt;
+      for(let s=1;s<=steps;s++){
+        const t=s/steps;
+        const pt={x:lerp(lastPt.x,curr.x,t), y:lerp(lastPt.y,curr.y,t)};
+        drawBrush(prev, pt); prev=pt;
+      }
+    }
+
+    lastPt = curr;
+  }
+
+  // Keyboard shortcuts
+  addEventListener('keydown', (e)=>{
+    if(e.key==='c'){ pctx.clearRect(0,0,W,H); }
+    if(e.key==='s'){ $('#saveBtn').click(); }
+    if(e.key==='g'){ $('#glow').checked=!$('#glow').checked; $('#glow').onchange({target:$('#glow')}); }
+    if(e.key==='m'){ $('#mirrorX').checked=!$('#mirrorX').checked; }
   });
-  camera.start();
-};
 
-document.getElementById('clear').onclick = () => {
-  ctx.clearRect(0,0,canvas.width,canvas.height);
-};
-
-document.getElementById('save').onclick = () => {
-  const link = document.createElement('a');
-  link.download = 'art.png';
-  link.href = canvas.toDataURL();
-  link.click();
-};
-
-document.getElementById('brush').onchange = e => {
-  brushType = e.target.value;
-};
-</script>
+  // Intro message
+  setStatus('Tap “Start Camera”, then pinch index+thumb to toggle drawing.');
+  </script>
 </body>
 </html>
