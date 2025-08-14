@@ -1,98 +1,129 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>HandPaint — Artistic Hand Drawing</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>HandPaint — Camera Drawing</title>
 <style>
-  body { margin: 0; background: #111; color: white; font-family: sans-serif; overflow: hidden; }
-  #controls { position: fixed; top: 10px; left: 10px; z-index: 10; }
-  button { margin: 2px; padding: 6px 10px; border: none; border-radius: 6px; cursor: pointer; }
-  canvas { display: block; }
+  body { margin: 0; background: #111; color: white; font-family: sans-serif; }
+  canvas { display: block; margin: 0 auto; background: #000; }
+  .controls { position: fixed; top: 10px; left: 10px; z-index: 10; }
+  button { margin-right: 5px; padding: 5px 10px; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
 </head>
 <body>
-<div id="controls">
-  <button id="startBtn">Start Camera</button>
-  <button id="clearBtn">Clear</button>
-  <button id="saveBtn">Save</button>
+<div class="controls">
+  <button id="start">Start Camera</button>
+  <button id="clear">Clear</button>
+  <button id="save">Save</button>
+  <select id="brush">
+    <option value="neon">Neon</option>
+    <option value="ink">Ink</option>
+    <option value="watercolor">Watercolor</option>
+    <option value="particles">Particles</option>
+  </select>
 </div>
-<video id="video" autoplay playsinline style="display:none"></video>
-<canvas id="canvas"></canvas>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.min.js"></script>
+<video id="video" style="display:none;" playsinline></video>
+<canvas id="output"></canvas>
 <script>
 const video = document.getElementById('video');
-const canvas = document.getElementById('canvas');
+const canvas = document.getElementById('output');
 const ctx = canvas.getContext('2d');
-let drawing = false;
-let pinchActive = false;
-let prevX = null, prevY = null;
-
 canvas.width = window.innerWidth;
 canvas.height = window.innerHeight;
 
-function clearCanvas() {
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+let drawing = false;
+let prevX = null, prevY = null;
+let brushType = 'neon';
+
+function distance(a, b) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
-document.getElementById('clearBtn').onclick = clearCanvas;
-document.getElementById('saveBtn').onclick = () => {
-  const link = document.createElement('a');
-  link.download = 'handpaint.png';
-  link.href = canvas.toDataURL();
-  link.click();
-};
+function drawLine(x1, y1, x2, y2) {
+  if (brushType === 'neon') {
+    ctx.strokeStyle = `hsl(${Math.random()*360},100%,50%)`;
+    ctx.shadowColor = ctx.strokeStyle;
+    ctx.shadowBlur = 20;
+    ctx.lineWidth = 5;
+  } else if (brushType === 'ink') {
+    ctx.strokeStyle = 'black';
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 3;
+  } else if (brushType === 'watercolor') {
+    ctx.strokeStyle = `rgba(0,0,255,${Math.random()*0.5})`;
+    ctx.lineWidth = 20;
+  } else if (brushType === 'particles') {
+    for (let i=0;i<5;i++) {
+      ctx.fillStyle = `hsl(${Math.random()*360},100%,50%)`;
+      ctx.beginPath();
+      ctx.arc(x2 + Math.random()*10-5, y2 + Math.random()*10-5, 3, 0, Math.PI*2);
+      ctx.fill();
+    }
+    return;
+  }
+  ctx.beginPath();
+  ctx.moveTo(x1, y1);
+  ctx.lineTo(x2, y2);
+  ctx.stroke();
+}
 
-function onResults(results) {
+const hands = new Hands({locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.7,
+  minTrackingConfidence: 0.5
+});
+
+hands.onResults(results => {
   ctx.drawImage(results.image, 0, 0, canvas.width, canvas.height);
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
     const landmarks = results.multiHandLandmarks[0];
-    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: 'rgba(255,255,255,0.3)', lineWidth: 1});
-    drawLandmarks(ctx, landmarks, {color: 'rgba(255,255,255,0.5)', lineWidth: 1});
-
     const indexTip = landmarks[8];
     const thumbTip = landmarks[4];
-    const dx = indexTip.x - thumbTip.x;
-    const dy = indexTip.y - thumbTip.y;
-    const distance = Math.sqrt(dx * dx + dy * dy);
-
-    if (distance < 0.05 && !pinchActive) {
-      drawing = !drawing;
-      pinchActive = true;
-    } else if (distance >= 0.05) {
-      pinchActive = false;
-    }
-
+    const pinch = distance(indexTip, thumbTip) < 0.05;
     const x = indexTip.x * canvas.width;
     const y = indexTip.y * canvas.height;
-    if (drawing && prevX !== null && prevY !== null) {
-      ctx.strokeStyle = `hsl(${(Date.now()/20)%360}, 100%, 70%)`;
-      ctx.lineWidth = 5;
-      ctx.beginPath();
-      ctx.moveTo(prevX, prevY);
-      ctx.lineTo(x, y);
-      ctx.stroke();
+    if (pinch) {
+      if (!drawing) {
+        drawing = true;
+        prevX = x; prevY = y;
+      } else {
+        drawLine(prevX, prevY, x, y);
+        prevX = x; prevY = y;
+      }
+    } else {
+      drawing = false;
     }
-    prevX = x;
-    prevY = y;
   }
-}
+});
 
-document.getElementById('startBtn').onclick = async () => {
-  const hands = new Hands({locateFile: file => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`});
-  hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: 0.7, minTrackingConfidence: 0.7 });
-  hands.onResults(onResults);
-
+document.getElementById('start').onclick = async () => {
   const camera = new Camera(video, {
-    onFrame: async () => {
-      await hands.send({image: video});
-    },
+    onFrame: async () => { await hands.send({image: video}); },
     width: 640,
     height: 480
   });
   camera.start();
+};
+
+document.getElementById('clear').onclick = () => {
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+};
+
+document.getElementById('save').onclick = () => {
+  const link = document.createElement('a');
+  link.download = 'art.png';
+  link.href = canvas.toDataURL();
+  link.click();
+};
+
+document.getElementById('brush').onchange = e => {
+  brushType = e.target.value;
 };
 </script>
 </body>
